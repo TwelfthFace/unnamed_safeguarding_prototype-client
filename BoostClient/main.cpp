@@ -126,7 +126,7 @@ void sendScreenshot(boost::asio::ip::tcp::socket& socket) {
         boost::asio::write(socket, boost::asio::buffer(&screenshot_data[bytes_sent], bytes_to_send));
         bytes_sent += bytes_to_send;
     }
-
+    //structure acknowledgement
     Ack ack;
     boost::asio::read(socket, boost::asio::buffer(&ack, sizeof(ack)));
 
