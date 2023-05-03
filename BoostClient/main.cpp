@@ -20,7 +20,7 @@ void readTextData(boost::asio::ip::tcp::socket& socket_, Header& header_);
 void sendScreenshot(boost::asio::ip::tcp::socket& socket);
 
 
-void lockScreen(ScreenLocker* lockscreen_handle) {
+void lockScreen(ScreenLocker* lockscreen_handle, bool fromPacketHandler) {
     if (!b_locked && !lockRequestInProgress && !unlockRequestInProgress) {
         lockRequestInProgress = true;
         lockscreen_handle->runInThread();
@@ -38,7 +38,6 @@ void unlockScreen(ScreenLocker* lockscreen_handle) {
         unlockRequestInProgress = false;
     }
 }
-
 
 std::vector<u_char> takeScreenshot()
 {
@@ -86,31 +85,37 @@ std::vector<u_char> takeScreenshot()
 
 void readHeader(boost::asio::ip::tcp::socket& socket_, ScreenLocker* lockscreen_handler) {
     while (true) {
-        std::cout << "WAIT FOR PACKET" << std::endl;
-        
-        Header header_;
-        
-        boost::asio::read(socket_, boost::asio::buffer(&header_, sizeof(Header)));
+        try {
+            std::cout << "WAIT FOR PACKET" << std::endl;
 
-        std::cout << "PACKET RECIEVED: " << header_.type << std::endl;
-        switch (header_.type) {
-        case TEXT:
-            readTextData(socket_, header_);
-            break;
-        case LOCK_SCREEN:
-            lockScreen(lockscreen_handler);
-            break;
-        case UNLOCK_SCREEN:
-            unlockScreen(lockscreen_handler);
-            break;
-        case SCREENSHOT:
-            sendScreenshot(socket_);
-            break;
-        case SCREENSHOT_REQ:
-            sendScreenshot(socket_);
-            break;
-        default:
-            std::cerr << "Unknown data type received" << std::endl;
+            Header header_;
+
+            boost::asio::read(socket_, boost::asio::buffer(&header_, sizeof(Header)));
+
+            std::cout << "PACKET RECIEVED: " << header_.type << std::endl;
+            switch (header_.type) {
+            case TEXT:
+                readTextData(socket_, header_);
+                break;
+            case LOCK_SCREEN:
+                lockScreen(lockscreen_handler, true);
+                break;
+            case UNLOCK_SCREEN:
+                unlockScreen(lockscreen_handler);
+                break;
+            case SCREENSHOT:
+                sendScreenshot(socket_);
+                break;
+            case SCREENSHOT_REQ:
+                sendScreenshot(socket_);
+                break;
+            default:
+                throw std::exception("Unknown data type received");
+                break;
+            }
+        }
+        catch ( std::exception &e) {
+            std::cerr << e.what() << std::endl;
             break;
         }
     }
@@ -127,6 +132,7 @@ void readTextData(boost::asio::ip::tcp::socket& socket_, Header& header_) {
     }
     catch (std::exception& ex) {
         cerr << "ERROR: MSG READ" << ex.what() << endl;
+        throw;
     }
 }
 
@@ -143,54 +149,74 @@ void sendText(boost::asio::ip::tcp::socket& socket) {
 }
 
 void sendScreenshot(boost::asio::ip::tcp::socket& socket) {
-    std::vector<unsigned char> screenshot_data = takeScreenshot();
-    Header header;
-    header.type = SCREENSHOT;
-    header.size = screenshot_data.size();
-    std::cout << "SCREENSHOT SIZE: " << (float)(header.size / 1000) / 1000 << "MB" << std::endl;
+    try {
+        std::vector<unsigned char> screenshot_data = takeScreenshot();
+        Header header;
+        header.type = SCREENSHOT;
+        header.size = screenshot_data.size();
+        std::cout << "SCREENSHOT SIZE: " << (float)(header.size / 1000) / 1000 << "MB" << std::endl;
 
-    boost::asio::write(socket, boost::asio::buffer(&header, sizeof(header)));
-    const size_t chunk_size = 1024; // adjust this
-    
-    size_t bytes_sent = 0;
-    while (bytes_sent < screenshot_data.size()) {
-        size_t bytes_to_send = std::min(chunk_size, screenshot_data.size() - bytes_sent);
-        boost::asio::write(socket, boost::asio::buffer(&screenshot_data[bytes_sent], bytes_to_send));
-        bytes_sent += bytes_to_send;
-    }
-    //structure acknowledgement
-    Ack ack;
-    boost::asio::read(socket, boost::asio::buffer(&ack, sizeof(ack)));
+        boost::asio::write(socket, boost::asio::buffer(&header, sizeof(header)));
+        const size_t chunk_size = 1024; // adjust this
 
-    if (ack.status == RECEIVED) {
-        cout << "Reply: Screenshot Recieved" << endl;
+        size_t bytes_sent = 0;
+        while (bytes_sent < screenshot_data.size()) {
+            try {
+                size_t bytes_to_send = std::min(chunk_size, screenshot_data.size() - bytes_sent);
+                boost::asio::write(socket, boost::asio::buffer(&screenshot_data[bytes_sent], bytes_to_send));
+                bytes_sent += bytes_to_send;
+            }
+            catch ( std::exception &e ) {
+                std::cerr << e.what() << std::endl;
+                break;
+            }
+        }
+        //structure acknowledgement
+        Ack ack;
+        boost::asio::read(socket, boost::asio::buffer(&ack, sizeof(ack)));
+
+        if (ack.status == RECEIVED) {
+            cout << "Reply: Screenshot Recieved" << endl;
+        }
+        else {
+            cerr << "ERROR: Screenshot Not Recieved" << endl;
+        }
     }
-    else {
-        cerr << "ERROR: Screenshot Not Recieved" << endl;
+    catch ( ... ) {
+        throw;
     }
 }
 
-using namespace std;
-int main() {
+std::shared_ptr<boost::asio::ip::tcp::socket> connect_to_server(boost::asio::io_context& io_context) {
+    std::shared_ptr<boost::asio::ip::tcp::socket> socket_ptr(new boost::asio::ip::tcp::socket(io_context));
 
+    boost::asio::ip::tcp::resolver resolver(io_context);
+    auto endpoints = resolver.resolve(kServerIpAddress, std::to_string(kServerPort));
+    boost::asio::connect(*socket_ptr, endpoints);
+
+    return socket_ptr;
+}
+
+int main() {
     ScreenLocker* lockscreen_handler = new ScreenLocker();
 
-    try {
-        boost::asio::io_context io_context;
-        boost::asio::ip::tcp::resolver resolver(io_context);
-        auto endpoints = resolver.resolve(kServerIpAddress, std::to_string(kServerPort));
-        boost::asio::ip::tcp::socket socket(io_context);
-        boost::asio::connect(socket, endpoints);
+    while (true) {
+        try {
+            boost::asio::io_context io_context;
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket_ptr = connect_to_server(io_context);
 
-        std::thread readHeader_thread(readHeader, std::ref(socket), lockscreen_handler);
+            std::thread readHeader_thread(readHeader, std::ref(*socket_ptr), lockscreen_handler);
 
+            unlockScreen(lockscreen_handler);
 
+            readHeader_thread.join();
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            lockScreen(lockscreen_handler, false);
 
-        readHeader_thread.join();
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        main();
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
     }
 
     return 0;
