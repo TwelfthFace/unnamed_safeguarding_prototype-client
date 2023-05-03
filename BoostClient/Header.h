@@ -3,8 +3,10 @@
 
 enum DataType {
 	TEXT = 0,
-	SCREENSHOT = 1,
-	SCREENSHOT_REQ = 2
+	LOCK_SCREEN = 1,
+	UNLOCK_SCREEN = 2,
+	SCREENSHOT = 3,
+	SCREENSHOT_REQ = 4
 };
 
 struct Header {
