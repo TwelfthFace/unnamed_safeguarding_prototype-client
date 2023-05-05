@@ -140,10 +140,12 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ScreenLocker.cpp" />
+    <ClCompile Include="KeyspaceMonitor.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Header.h" />
     <ClInclude Include="AckHeader.h" />
+    <ClInclude Include="KeyspaceMonitor.h" />
     <ClInclude Include="ScreenLocker.h" />
     <ClInclude Include="ThreadSafeQueue.h" />
   </ItemGroup>

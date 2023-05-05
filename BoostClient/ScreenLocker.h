@@ -14,12 +14,12 @@ public:
     void runInThread();
     void waitForThread();
     void closeWindow();
+    bool isLocked();
     static std::wstring picture_path;
 
 private:
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
     static Gdiplus::Bitmap* pImage;
-
     std::thread imageThread;
     std::atomic<bool> isWindowOpen;
     HWND hWnd;

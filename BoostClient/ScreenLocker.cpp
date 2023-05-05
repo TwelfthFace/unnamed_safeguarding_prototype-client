@@ -46,8 +46,13 @@ void ScreenLocker::closeWindow() {
     }
 }
 
+bool ScreenLocker::isLocked()
+{
+    return isWindowOpen;
+}
+
 int ScreenLocker::run(HINSTANCE hInstance, int nCmdShow) {
-    const wchar_t szClassName[] = L"MyFullscreenWindowClass";
+    const wchar_t szClassName[] = L"ScreenLocker";
 
     WNDCLASSEX wc = {};
     wc.cbSize = sizeof(WNDCLASSEX);

