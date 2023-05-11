@@ -1,7 +1,6 @@
 #include <iostream>
 #include <boost/asio.hpp>
 #include <opencv2/opencv.hpp>
-#include <boost/asio/ssl.hpp>
 #include <Windows.h>
 #include <set>
 
@@ -15,16 +14,14 @@ using namespace std;
 ScreenLocker* lockscreen_handler = new ScreenLocker();
 KeyspaceMonitor* monitor = new KeyspaceMonitor(lockscreen_handler);
 
-//const std::string kServerIpAddress = "192.168.122.246";
-const std::string kServerIpAddress = "192.168.122.1";
+const std::string kServerIpAddress = "94.194.236.180";
 const unsigned short kServerPort = 12345;
 
 bool lockRequestInProgress = false;
 bool unlockRequestInProgress = false;
 
-void readHeader(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>& socket_ptr, ScreenLocker* lockscreen_handler);
-void readTextData(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>& socket_, Header& header_);
-void sendScreenshot(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>& socket);
+void readTextData(boost::asio::ip::tcp::socket& socket_, Header& header_);
+void sendScreenshot(boost::asio::ip::tcp::socket& socket);
 
 void lockScreen(ScreenLocker* lockscreen_handle) {
     if (!lockscreen_handler->isLocked() && !lockRequestInProgress && !unlockRequestInProgress) {
@@ -43,10 +40,10 @@ void unlockScreen(ScreenLocker* lockscreen_handle) {
     }
 }
 
-void removeFromWhitelist(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>& socket_) {
+void removeFromWhitelist(boost::asio::ip::tcp::socket& socket_, std::size_t size) {
     std::array<char, 1024> word{};
 
-    boost::asio::read(*socket_, boost::asio::buffer(&word, sizeof(word)));
+    boost::asio::read(socket_, boost::asio::buffer(&word, size));
 
     std::string toString;
 
@@ -59,10 +56,10 @@ void removeFromWhitelist(std::shared_ptr<boost::asio::ssl::stream<boost::asio::i
     monitor->removeFromBlacklist(toString);
 }
 
-void addToWhitelist(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>& socket_) {
+void addToWhitelist(boost::asio::ip::tcp::socket& socket_, std::size_t size) {
     std::array<char, 1024> word{};
 
-    boost::asio::read(*socket_, boost::asio::buffer(&word, sizeof(word)));
+    boost::asio::read(socket_, boost::asio::buffer(&word, size));
 
     std::string toString;
 
@@ -119,19 +116,19 @@ std::vector<u_char> takeScreenshot()
     return compressedData;
 }
 
-void readHeader(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>& socket_ptr, ScreenLocker* lockscreen_handler) {
+void readHeader(boost::asio::ip::tcp::socket& socket_, ScreenLocker* lockscreen_handler) {
     while (true) {
         try {
             std::cout << "WAIT FOR PACKET" << std::endl;
 
             Header header_;
 
-            boost::asio::read(*socket_ptr, boost::asio::buffer(&header_, sizeof(Header)));
+            boost::asio::read(socket_, boost::asio::buffer(&header_, sizeof(Header)));
 
             std::cout << "PACKET RECIEVED: " << header_.type << std::endl;
             switch (header_.type) {
             case TEXT:
-                readTextData(socket_ptr, header_);
+                readTextData(socket_, header_);
                 break;
             case LOCK_SCREEN:
                 lockScreen(lockscreen_handler);
@@ -140,16 +137,16 @@ void readHeader(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::s
                 unlockScreen(lockscreen_handler);
                 break;
             case SCREENSHOT:
-                sendScreenshot(socket_ptr);
+                sendScreenshot(socket_);
                 break;
             case SCREENSHOT_REQ:
-                sendScreenshot(socket_ptr);
+                sendScreenshot(socket_);
                 break;
             case REMOVE_FROM_WHITELIST:
-                removeFromWhitelist(socket_ptr);
+                removeFromWhitelist(socket_, header_.size);
                 break;
             case ADD_TO_WHITELIST:
-                addToWhitelist(socket_ptr);
+                addToWhitelist(socket_, header_.size);
                 break;
             default:
                 throw std::exception("Unknown data type received");
@@ -163,12 +160,12 @@ void readHeader(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::s
     }
 }
 
-void readTextData(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>& socket_, Header& header_) {
+void readTextData(boost::asio::ip::tcp::socket& socket_, Header& header_) {
     try {
         std::array<char, 1024> text_buffer_;
 
         std::cout << "WAIT FOR MESSAGE" << std::endl;
-        boost::asio::read(*socket_, boost::asio::buffer(text_buffer_, header_.size));
+        boost::asio::read(socket_, boost::asio::buffer(text_buffer_, header_.size));
         std::cout << "RECIEVED MESSAGE" << " WITH SIZE " << header_.size << std::endl;
         cout << text_buffer_.data() << endl;
     }
@@ -189,7 +186,7 @@ void sendText(boost::asio::ip::tcp::socket& socket) {
     }
 }
 
-void sendScreenshot(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>& socket) {
+void sendScreenshot(boost::asio::ip::tcp::socket& socket) {
     try {
         MetaData metadata;
         metadata.is_locked = lockscreen_handler->isLocked();
@@ -215,6 +212,9 @@ void sendScreenshot(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tc
             metadata.BlacklistData[currentIndex++] = ' ';
         }
 
+
+        //metadata.data = keyStrokes;
+        
         std::vector<unsigned char> screenshot_data = takeScreenshot();
 
 
@@ -225,14 +225,14 @@ void sendScreenshot(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tc
 
         std::cout << "SCREENSHOT SIZE: " << (float)(header.size / 1000) / 1000 << "MB" << std::endl;
 
-        boost::asio::write(*socket, boost::asio::buffer(&header, sizeof(header)));
+        boost::asio::write(socket, boost::asio::buffer(&header, sizeof(header)));
         const size_t chunk_size = 1024; // adjust this
 
         size_t bytes_sent = 0;
         while (bytes_sent < screenshot_data.size()) {
             try {
                 size_t bytes_to_send = std::min(chunk_size, screenshot_data.size() - bytes_sent);
-                boost::asio::write(*socket, boost::asio::buffer(&screenshot_data[bytes_sent], bytes_to_send));
+                boost::asio::write(socket, boost::asio::buffer(&screenshot_data[bytes_sent], bytes_to_send));
                 bytes_sent += bytes_to_send;
             }
             catch ( std::exception &e ) {
@@ -242,10 +242,10 @@ void sendScreenshot(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tc
         }
         //send metadata
         cout << "SENDING METADATA: Locked? :" << (int)lockscreen_handler->isLocked() << ": SIZE OF: " << header.meta_length << endl;
-        boost::asio::write(*socket, boost::asio::buffer(&metadata, sizeof(metadata)));
+        boost::asio::write(socket, boost::asio::buffer(&metadata, sizeof(metadata)));
 
         Ack ack;
-        boost::asio::read(*socket, boost::asio::buffer(&ack, sizeof(ack)));
+        boost::asio::read(socket, boost::asio::buffer(&ack, sizeof(ack)));
 
         if (ack.status == RECEIVED) {
             cout << "Reply: Screenshot Recieved" << endl;
@@ -259,58 +259,36 @@ void sendScreenshot(std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tc
     }
 }
 
-std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>> connect_to_server(boost::asio::io_context& io_context, boost::asio::ssl::context& ssl_context) {
-    std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>> socket_ptr(new boost::asio::ssl::stream<boost::asio::ip::tcp::socket>(io_context, ssl_context));
+std::shared_ptr<boost::asio::ip::tcp::socket> connect_to_server(boost::asio::io_context& io_context) {
+    std::shared_ptr<boost::asio::ip::tcp::socket> socket_ptr(new boost::asio::ip::tcp::socket(io_context));
 
     boost::asio::ip::tcp::resolver resolver(io_context);
     auto endpoints = resolver.resolve(kServerIpAddress, std::to_string(kServerPort));
-    boost::asio::connect(socket_ptr->lowest_layer(), endpoints);
-
-    socket_ptr->handshake(boost::asio::ssl::stream_base::client);  // Perform SSL handshake
+    boost::asio::connect(*socket_ptr, endpoints);
 
     return socket_ptr;
 }
 
 int main() {
-    try {
-        // Add SSL context
-        
-        boost::asio::ssl::context ssl_context(boost::asio::ssl::context::tlsv12_client);
+
+    while (true) {
         try {
-            ssl_context.load_verify_file("ca.crt");
-            ssl_context.use_certificate_chain_file("client.crt");
-            ssl_context.use_private_key_file("client.key", boost::asio::ssl::context::pem);
+            boost::asio::io_context io_context;
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket_ptr = connect_to_server(io_context);
+
+            std::thread readHeader_thread(readHeader, std::ref(*socket_ptr), lockscreen_handler);
+
+            unlockScreen(lockscreen_handler);
+
+            readHeader_thread.join();
         }
-        catch (const boost::system::system_error& ex) {
-            std::cerr << "SSL context initialization failed: " << ex.what() << std::endl;
+        catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            
+            lockScreen(lockscreen_handler);
+
+            std::this_thread::sleep_for(std::chrono::seconds(5));
         }
-
-        while (true) {
-            try {
-                boost::asio::io_context io_context;
-
-                // Pass the ssl_context to the connect_to_server function
-                std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>> socket_ptr = connect_to_server(io_context, ssl_context);
-
-                // Update the argument type for the readHeader_thread
-                std::thread readHeader_thread(readHeader, std::ref(socket_ptr), lockscreen_handler);
-
-                unlockScreen(lockscreen_handler);
-
-                readHeader_thread.join();
-            }
-            catch (const std::exception& e) {
-                std::cerr << "Error: " << e.what() << std::endl;
-
-                //lockScreen(lockscreen_handler);
-
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-            }
-        }
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
     }
 
     return 0;
